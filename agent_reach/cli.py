@@ -91,6 +91,18 @@ def main():
     p_uninstall.add_argument("--keep-config", action="store_true",
                              help="Remove skill files only, keep ~/.agent-reach/ config and tokens")
 
+    # ── skill ──
+    p_skill = sub.add_parser("skill", help="Manage agent skill registration")
+    p_skill_group = p_skill.add_mutually_exclusive_group(required=True)
+    p_skill_group.add_argument("--install", action="store_true",
+                               help="Install SKILL.md to agent skill directories")
+    p_skill_group.add_argument("--uninstall", action="store_true",
+                               help="Remove SKILL.md from agent skill directories")
+
+    # ── format ──
+    p_format = sub.add_parser("format", help="Clean and format platform API output")
+    p_format.add_argument("platform", choices=["xhs"], help="Platform to format (xhs)")
+
     # ── check-update ──
     sub.add_parser("check-update", help="Check for new versions and changes")
 
@@ -127,6 +139,10 @@ def main():
         _cmd_configure(args)
     elif args.command == "uninstall":
         _cmd_uninstall(args)
+    elif args.command == "skill":
+        _cmd_skill(args)
+    elif args.command == "format":
+        _cmd_format(args)
 
 
 # ── Command handlers ────────────────────────────────
@@ -271,11 +287,20 @@ def _install_skill():
     import importlib.resources
 
     # Determine skill install path
+    # Priority 1: OPENCLAW_HOME environment variable (if set)
+    # Priority 2: ~/.openclaw/skills (default)
+    # Priority 3: ~/.claude/skills (Claude Code)
+    # Priority 4: ~/.agents/skills (Generic agents)
     skill_dirs = [
         os.path.expanduser("~/.openclaw/skills"),   # OpenClaw
         os.path.expanduser("~/.claude/skills"),      # Claude Code (if exists)
         os.path.expanduser("~/.agents/skills"),      # Generic agents
     ]
+
+    # Insert OPENCLAW_HOME path at the beginning if environment variable is set
+    openclaw_home = os.environ.get("OPENCLAW_HOME")
+    if openclaw_home:
+        skill_dirs.insert(0, os.path.join(openclaw_home, ".openclaw", "skills"))
 
     installed = False
     for skill_dir in skill_dirs:
@@ -304,6 +329,69 @@ def _install_skill():
             print(f"Skill installed: {target}")
         except Exception:
             print("  -- Could not install agent skill (optional)")
+
+
+def _uninstall_skill():
+    """Remove SKILL.md from all known agent skill directories."""
+    import shutil
+
+    skill_dirs = [
+        ("~/.openclaw/skills/agent-reach", "OpenClaw"),
+        ("~/.claude/skills/agent-reach", "Claude Code"),
+        ("~/.agents/skills/agent-reach", "Agent"),
+    ]
+
+    # Also check OPENCLAW_HOME
+    openclaw_home = os.environ.get("OPENCLAW_HOME")
+    if openclaw_home:
+        skill_dirs.insert(
+            0,
+            (os.path.join(openclaw_home, ".openclaw", "skills", "agent-reach"), "OpenClaw"),
+        )
+
+    removed = False
+    for skill_path_template, platform_name in skill_dirs:
+        skill_path = os.path.expanduser(skill_path_template)
+        if os.path.isdir(skill_path):
+            try:
+                shutil.rmtree(skill_path)
+                print(f"  Removed {platform_name} skill: {skill_path}")
+                removed = True
+            except Exception as e:
+                print(f"  Could not remove {skill_path}: {e}")
+
+    if not removed:
+        print("  No skill installations found.")
+
+
+def _cmd_skill(args):
+    """Manage agent skill registration."""
+    if args.install:
+        _install_skill()
+    elif args.uninstall:
+        _uninstall_skill()
+
+
+def _cmd_format(args):
+    """Clean and format platform API output from stdin."""
+    import json
+    import sys
+
+    if args.platform == "xhs":
+        from agent_reach.channels.xiaohongshu import format_xhs_result
+
+        raw = sys.stdin.read().strip()
+        if not raw:
+            print("Error: no input on stdin", file=sys.stderr)
+            sys.exit(1)
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError as e:
+            print(f"Error: invalid JSON: {e}", file=sys.stderr)
+            sys.exit(1)
+
+        cleaned = format_xhs_result(data)
+        print(json.dumps(cleaned, ensure_ascii=False, indent=2))
 
 
 def _install_system_deps():
@@ -395,24 +483,24 @@ def _install_system_deps():
         except Exception:
             print("  [!]  Node.js install failed. Try: apt install nodejs npm, or nvm install 22, or download from https://nodejs.org")
 
-    # ── xreach CLI (for Twitter search) ──
-    if shutil.which("xreach"):
-        print("  ✅ xreach CLI already installed")
+    # ── bird CLI (for Twitter search) ──
+    if shutil.which("bird") or shutil.which("birdx"):
+        print("  ✅ bird CLI already installed")
     else:
         if shutil.which("npm"):
             try:
                 subprocess.run(
-                    ["npm", "install", "-g", "xreach-cli"],
+                    ["npm", "install", "-g", "@steipete/bird"],
                     capture_output=True, encoding="utf-8", errors="replace", timeout=120,
                 )
-                if shutil.which("xreach"):
-                    print("  ✅ xreach CLI installed (Twitter search + timeline)")
+                if shutil.which("bird") or shutil.which("birdx"):
+                    print("  ✅ bird CLI installed (Twitter search + timeline)")
                 else:
-                    print("  -- xreach CLI install failed (optional — Twitter reading still works via Jina)")
+                    print("  -- bird CLI install failed (optional — Twitter reading still works via Jina)")
             except Exception:
-                print("  -- xreach CLI install failed (optional — Twitter reading still works via Jina)")
+                print("  -- bird CLI install failed (optional — Twitter reading still works via Jina)")
         else:
-            print("  -- xreach CLI requires Node.js (optional — Twitter reading still works via Jina)")
+            print("  -- bird CLI requires Node.js (optional — Twitter reading still works via Jina)")
 
     # ── undici (proxy support for Node.js fetch) ──
     npm_cmd = shutil.which("npm")
@@ -426,7 +514,7 @@ def _install_system_deps():
                 subprocess.run([npm_cmd, "install", "-g", "undici"], capture_output=True, encoding="utf-8", errors="replace", timeout=60)
                 print("  ✅ undici installed (Node.js proxy support)")
             except Exception:
-                print("  -- undici install failed (optional — xreach may not work behind proxies)")
+                print("  -- undici install failed (optional — bird may not work behind proxies)")
 
     # ── yt-dlp JS runtime config (YouTube requires external JS runtime) ──
     if shutil.which("node"):
@@ -626,7 +714,7 @@ def _install_system_deps_safe():
     deps = [
         ("gh", ["gh"], "GitHub CLI", "https://cli.github.com — or: apt install gh / brew install gh"),
         ("node", ["node", "npm"], "Node.js", "https://nodejs.org — or: apt install nodejs npm"),
-        ("xreach", ["xreach"], "xreach CLI (Twitter)", "npm install -g xreach-cli"),
+        ("bird", ["bird", "birdx"], "bird CLI (Twitter)", "npm install -g @steipete/bird"),
     ]
 
     missing = []
@@ -679,7 +767,7 @@ def _install_system_deps_dryrun():
     checks = [
         ("gh CLI", ["gh"], "apt install gh / brew install gh"),
         ("Node.js", ["node"], "curl NodeSource setup | bash + apt install nodejs"),
-        ("xreach CLI", ["xreach"], "npm install -g xreach-cli"),
+        ("bird CLI", ["bird", "birdx"], "npm install -g @steipete/bird"),
     ]
 
     for label, binaries, method in checks:
@@ -904,29 +992,16 @@ def _cmd_configure(args):
         # Accept two formats:
         # 1. auth_token ct0 (two separate values)
         # 2. Full cookie header string: "auth_token=xxx; ct0=yyy; ..."
-        auth_token = None
-        ct0 = None
-
-        if "auth_token=" in value and "ct0=" in value:
-            # Full cookie string — parse it
-            for part in value.replace(";", " ").split():
-                if part.startswith("auth_token="):
-                    auth_token = part.split("=", 1)[1]
-                elif part.startswith("ct0="):
-                    ct0 = part.split("=", 1)[1]
-        elif len(value.split()) == 2 and "=" not in value:
-            # Two separate values: AUTH_TOKEN CT0
-            parts = value.split()
-            auth_token = parts[0]
-            ct0 = parts[1]
+        auth_token, ct0 = _parse_twitter_cookie_input(value)
 
         if auth_token and ct0:
             config.set("twitter_auth_token", auth_token)
             config.set("twitter_ct0", ct0)
 
-            # Sync credentials to xreach's session.json so xreach auth check works
+            # Sync credentials to bird CLI env
             try:
                 import json
+                # Legacy: sync to xfetch session.json for backward compat
                 xfetch_dir = os.path.join(os.path.expanduser("~"), ".config", "xfetch")
                 os.makedirs(xfetch_dir, exist_ok=True)
                 session_path = os.path.join(xfetch_dir, "session.json")
@@ -939,24 +1014,34 @@ def _cmd_configure(args):
                 with open(session_path, "w", encoding="utf-8") as sf:
                     json.dump(session_data, sf, indent=2)
                 os.chmod(session_path, 0o600)
-                print("✅ Twitter cookies configured (synced to xreach)!")
+
+                # bird CLI: write shell-sourceable credentials.env
+                bird_dir = os.path.join(os.path.expanduser("~"), ".config", "bird")
+                os.makedirs(bird_dir, exist_ok=True)
+                env_path = os.path.join(bird_dir, "credentials.env")
+                with open(env_path, "w", encoding="utf-8") as f:
+                    f.write(f'AUTH_TOKEN="{auth_token}"\n')
+                    f.write(f'CT0="{ct0}"\n')
+                os.chmod(env_path, 0o600)
+
+                print("✅ Twitter cookies configured (synced to bird)!")
             except Exception as e:
                 print("✅ Twitter cookies configured!")
-                print(f"[!] Could not sync to xreach session.json: {e}")
+                print(f"[!] Could not sync to bird credentials: {e}")
 
             print("Testing Twitter access...", end=" ")
             try:
                 import subprocess
-                xreach = shutil.which("xreach")
-                if not xreach:
-                    print("[!] xreach CLI not installed. Run: npm install -g xreach-cli")
+                bird = shutil.which("bird") or shutil.which("birdx")
+                if not bird:
+                    print("[!] bird CLI not installed. Run: npm install -g @steipete/bird")
                 else:
                     import os
                     env = os.environ.copy()
                     env["AUTH_TOKEN"] = auth_token
                     env["CT0"] = ct0
                     result = subprocess.run(
-                        [xreach, "search", "test", "-n", "1"],
+                        [bird, "search", "test", "-n", "1"],
                         capture_output=True, encoding="utf-8", errors="replace", timeout=15,
                         env=env,
                     )
@@ -987,6 +1072,27 @@ def _cmd_configure(args):
     elif args.key == "groq-key":
         config.set("groq_api_key", value)
         print(f"✅ Groq key configured!")
+
+
+def _parse_twitter_cookie_input(value: str):
+    """Parse Twitter cookie input from either separate values or a cookie header."""
+    auth_token = None
+    ct0 = None
+
+    if "auth_token=" in value and "ct0=" in value:
+        # Full cookie string — parse it.
+        for part in value.replace(";", " ").split():
+            if part.startswith("auth_token="):
+                auth_token = part.split("=", 1)[1]
+            elif part.startswith("ct0="):
+                ct0 = part.split("=", 1)[1]
+    elif len(value.split()) == 2 and "=" not in value:
+        # Two separate values: AUTH_TOKEN CT0.
+        parts = value.split()
+        auth_token = parts[0]
+        ct0 = parts[1]
+
+    return auth_token, ct0
 
 
 def _configure_xhs_cookies(value):
@@ -1259,16 +1365,23 @@ def _cmd_uninstall(args):
     print()
     print("Optional: remove tools installed by Agent Reach:")
     print("  npm uninstall -g mcporter")
-    print("  npm uninstall -g xreach-cli")
+    print("  npm uninstall -g @steipete/bird")
     print("  npm uninstall -g undici")
 
 
 def _cmd_doctor():
     from agent_reach.config import Config
     from agent_reach.doctor import check_all, format_report
+    try:
+        from rich import print as rprint
+    except ImportError:
+        rprint = print
     config = Config()
     results = check_all(config)
-    print(format_report(results))
+    rprint(format_report(results))
+
+    # Auto-install skill if not already present (fixes #154)
+    _install_skill()
 
 
 def _cmd_setup():
